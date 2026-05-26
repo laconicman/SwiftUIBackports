@@ -304,7 +304,7 @@ private extension Backport.Representable {
                 if #available(iOS 16, *) {
                     return .custom(identifier: .init(detent.id.rawValue)) { _ in height }
                 } else {
-                    Self.warnUnsupportedDetentOnce("PresentationDetent.height(\(height)) requires iOS 16+; falling back to .medium")
+                    warnUnsupportedDetentOnce("PresentationDetent.height(\(height)) requires iOS 16+; falling back to .medium")
                     return .medium()
                 }
             }
@@ -314,7 +314,7 @@ private extension Backport.Representable {
                         fraction * context.maximumDetentValue
                     }
                 } else {
-                    Self.warnUnsupportedDetentOnce("PresentationDetent.fraction(\(fraction)) requires iOS 16+; falling back to .medium")
+                    warnUnsupportedDetentOnce("PresentationDetent.fraction(\(fraction)) requires iOS 16+; falling back to .medium")
                     return .medium()
                 }
             }
