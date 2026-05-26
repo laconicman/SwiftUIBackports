@@ -115,6 +115,16 @@ A custom `GeometryReader` implementation that correctly auto-sizes itself to its
 
 A custom `ScrollView` that respects `Spacer`'s when the content is not scrollable. This is useful when you need to place a view at the edges of your scrollview while its content is small enough to not require scrolling. Another great use case is vertically centered content that becomes `top` aligned once the content requires scrolling.
 
+**BottomActionSheet** (iOS only)
+
+A bottom-anchored action-sheet card that always slides up from the bottom of the screen and sizes to its content, on every iOS device and size class — including iPad regular size class, where `.confirmationDialog` and `.sheet + presentationDetents` fall back to popovers. Mirrors the `.sheet` API surface with `isPresented:` and `item:` overloads, and exposes a dismiss action via the `\.bottomActionSheetDismiss` environment value. Supports drag-to-dismiss, VoiceOver `.isModal` + escape gesture, hardware Escape, and Reduce Motion.
+
+```swift
+.backport.bottomActionSheet(isPresented: $isShowing) {
+    Button("Cancel") { dismiss() }
+}
+```
+
 ## Installation
 
 You can install manually (by copying the files in the `Sources` directory) or using Swift Package Manager (**preferred**)
