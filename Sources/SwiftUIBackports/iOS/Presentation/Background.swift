@@ -158,7 +158,16 @@ private final class BackgroundClearingView: UIView {
         // background is what makes the supplied style visible.
         var controller: UIViewController? = parentController
         while let candidate = controller {
-            if String(describing: type(of: candidate)).contains("UIHostingController") {
+            // `UIHostingController` is generic (`UIHostingController<Content>`) and
+            // Swift generics are invariant, so there is no `is` / `as?` form that
+            // matches "any specialisation" of it: `is UIHostingController` fails
+            // to compile (the Content parameter cannot be inferred), and
+            // `as? UIHostingController<Any>` / `as? UIHostingController<AnyView>`
+            // only match that exact specialisation. There is also no public
+            // non-generic base class or protocol to test against. Name-based
+            // identification via the Objective-C class name is the standard
+            // workaround used by UIKit-bridge libraries in the SwiftUI ecosystem.
+            if NSStringFromClass(type(of: candidate)).contains("UIHostingController") {
                 // Only clear when the host is actually being presented as a modal,
                 // so we never accidentally make the application's root host
                 // transparent.
