@@ -101,6 +101,14 @@ public extension Backport<Any> {
             public static var large: Identifier {
                 .init(rawValue: "com.apple.UIKit.large")
             }
+
+            /// Raw-value prefix used to encode the value of a
+            /// ``Backport/PresentationDetent/height(_:)`` detent.
+            fileprivate static let heightPrefix = "com.apple.UIKit.height."
+
+            /// Raw-value prefix used to encode the value of a
+            /// ``Backport/PresentationDetent/fraction(_:)`` detent.
+            fileprivate static let fractionPrefix = "com.apple.UIKit.fraction."
         }
 
         public let id: Identifier
@@ -116,17 +124,69 @@ public extension Backport<Any> {
             .init(id: .large)
         }
 
+        /// A custom detent with the specified height.
+        ///
+        /// On iOS 16+ this is resolved through
+        /// ``UISheetPresentationController/Detent/custom(identifier:resolver:)``
+        /// with a constant resolver. On iOS 15 there is no native equivalent —
+        /// the sheet falls back to ``medium`` and emits a runtime warning the
+        /// first time the fallback is hit per process.
+        ///
+        /// - Parameter height: The height of the detent in points.
+        public static func height(_ height: CGFloat) -> PresentationDetent {
+            .init(id: .init(rawValue: "\(Identifier.heightPrefix)\(height)"))
+        }
+
+        /// A custom detent with a height that's a fraction of the available
+        /// detent height.
+        ///
+        /// On iOS 16+ this is resolved through
+        /// ``UISheetPresentationController/Detent/custom(identifier:resolver:)``
+        /// using `fraction * context.maximumDetentValue`. On iOS 15 there is no
+        /// native equivalent — the sheet falls back to ``medium`` and emits a
+        /// runtime warning the first time the fallback is hit per process.
+        ///
+        /// - Parameter fraction: The fraction of the available detent height.
+        public static func fraction(_ fraction: CGFloat) -> PresentationDetent {
+            .init(id: .init(rawValue: "\(Identifier.fractionPrefix)\(fraction)"))
+        }
+
         fileprivate static var none: PresentationDetent {
             return .init(id: .init(rawValue: ""))
         }
 
+        /// Decoded numeric value when the identifier was created via
+        /// ``height(_:)``, otherwise `nil`.
+        internal var heightValue: CGFloat? {
+            guard id.rawValue.hasPrefix(Identifier.heightPrefix) else { return nil }
+            let suffix = id.rawValue.dropFirst(Identifier.heightPrefix.count)
+            return Double(suffix).map { CGFloat($0) }
+        }
+
+        /// Decoded fraction when the identifier was created via
+        /// ``fraction(_:)``, otherwise `nil`.
+        internal var fractionValue: CGFloat? {
+            guard id.rawValue.hasPrefix(Identifier.fractionPrefix) else { return nil }
+            let suffix = id.rawValue.dropFirst(Identifier.fractionPrefix.count)
+            return Double(suffix).map { CGFloat($0) }
+        }
+
+        /// Approximate ordering key used to sort detents into the ascending
+        /// order expected by `UISheetPresentationController.detents`.
+        ///
+        /// Heights and fractions sort by numeric value; `.medium` and `.large`
+        /// are placed at conservative defaults so a mixed array sorts in a
+        /// reasonable order without resolving the runtime screen size.
+        private var sortKey: Double {
+            if let value = heightValue { return Double(value) }
+            if let value = fractionValue { return Double(value) * 600 }
+            if id == .medium { return 400 }
+            if id == .large { return 800 }
+            return 0
+        }
+
         public static func < (lhs: PresentationDetent, rhs: PresentationDetent) -> Bool {
-            switch (lhs, rhs) {
-            case (.large, .medium):
-                return false
-            default:
-                return true
-            }
+            lhs.sortKey < rhs.sortKey
         }
     }
 }
@@ -189,13 +249,8 @@ private extension Backport.Representable {
 
             if let controller = parent?.sheetPresentationController {
                 controller.animateChanges {
-                    controller.detents = detents.sorted().map {
-                        switch $0 {
-                        case .medium:
-                            return .medium()
-                        default:
-                            return .large()
-                        }
+                    controller.detents = detents.sorted().map { detent in
+                        Self.systemDetent(for: detent)
                     }
 
                     if let selection = selection {
@@ -234,6 +289,49 @@ private extension Backport.Representable {
         override func forwardingTarget(for aSelector: Selector!) -> Any? {
             if super.responds(to: aSelector) { return self }
             return _delegate
+        }
+
+        /// Resolves a ``Backport/PresentationDetent`` to the system
+        /// `UISheetPresentationController.Detent` that should be applied.
+        ///
+        /// On iOS 16+, `.height` and `.fraction` are bridged via
+        /// `Detent.custom(identifier:resolver:)`, preserving the identifier so
+        /// that ``selection`` round-trips correctly. On iOS 15 the system has
+        /// no custom-detent API, so both fall back to ``.medium()`` and emit a
+        /// one-shot runtime warning to aid debugging.
+        static func systemDetent(for detent: Backport<Any>.PresentationDetent) -> UISheetPresentationController.Detent {
+            if let height = detent.heightValue {
+                if #available(iOS 16, *) {
+                    return .custom(identifier: .init(detent.id.rawValue)) { _ in height }
+                } else {
+                    Self.warnUnsupportedDetentOnce("PresentationDetent.height(\(height)) requires iOS 16+; falling back to .medium")
+                    return .medium()
+                }
+            }
+            if let fraction = detent.fractionValue {
+                if #available(iOS 16, *) {
+                    return .custom(identifier: .init(detent.id.rawValue)) { context in
+                        fraction * context.maximumDetentValue
+                    }
+                } else {
+                    Self.warnUnsupportedDetentOnce("PresentationDetent.fraction(\(fraction)) requires iOS 16+; falling back to .medium")
+                    return .medium()
+                }
+            }
+            switch detent {
+            case .medium:
+                return .medium()
+            default:
+                return .large()
+            }
+        }
+
+        private static let unsupportedDetentWarnings: NSMutableSet = .init()
+
+        private static func warnUnsupportedDetentOnce(_ message: String) {
+            guard unsupportedDetentWarnings.contains(message) == false else { return }
+            unsupportedDetentWarnings.add(message)
+            print("[SwiftUIBackports] \(message)")
         }
     }
 }
