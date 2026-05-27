@@ -249,9 +249,19 @@ private extension Backport.Representable {
 
             if let controller = parent?.sheetPresentationController {
                 controller.animateChanges {
-                    controller.detents = detents.sorted().map { detent in
-                        Self.systemDetent(for: detent)
+                    let systemDetents: [UISheetPresentationController.Detent]
+                    if #available(iOS 16, *) {
+                        systemDetents = detents.sorted().map { Self.systemDetent(for: $0) }
+                    } else {
+                        // On iOS 15, .height and .fraction both degrade to .medium().
+                        // Collapse to unique system-level equivalents before bridging
+                        // to avoid passing duplicate detent identifiers to UIKit.
+                        let collapsed = Set(detents.map { d -> Backport<Any>.PresentationDetent in
+                            (d.heightValue != nil || d.fractionValue != nil) ? .medium : d
+                        })
+                        systemDetents = collapsed.sorted().map { Self.systemDetent(for: $0) }
                     }
+                    controller.detents = systemDetents
 
                     if let selection = selection {
                         controller.selectedDetentIdentifier = .init(selection.wrappedValue.id.rawValue)
