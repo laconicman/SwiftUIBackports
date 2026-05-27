@@ -41,6 +41,33 @@ What it costs:
 - PR [#5](https://github.com/laconicman/SwiftUIBackports/pull/5) — minimum-impact refactor (drops the `as?` downcast, adds extension-level iOS deprecation). The deeper refactor described above was the sibling option deferred in favour of this entry.
 - Devin Review analysis on PR #1: file-level "Different architectural approach from other presentation backports" flag (verdict: intentional and appropriate); `R170` "String-based UIHostingController detection is fragile but standard" flag (verdict: necessary under the current architecture).
 
+### `PresentationDetent.sortKey`: approximate `Comparable` ordering on mixed custom + system detent sets
+
+**Current state.** `PresentationDetent` conforms to `Comparable` via a private `sortKey` that uses hardcoded constants: heights are their point value, fractions multiply by 600, `.medium` = 400, `.large` = 800. This produces a valid strict-weak ordering (replacing a prior implementation that violated `Comparable`'s contract) and is good enough for the common `[.medium, .large]` case.
+
+**Known limitation.** On tall devices `.medium` resolves to ~500pt at runtime, so `.height(450)` (sortKey 450) sorts above `.medium` (sortKey 400) even though `.medium` is taller. Similarly, `.fraction(1.0)` (sortKey 600) sorts below `.large` (sortKey 800) even though they resolve to approximately the same height. Two in-tree consumers use this ordering semantically for tint-adjustment decisions:
+
+- `Detents.swift` `update(detents:selection:)` — compares the current selection against the largest undimmed detent.
+- `BackgroundInteraction.swift` `update(interaction:)` — compares the selected detent against the `.enabled(upThrough:)` threshold.
+
+In the narrow window where a custom height falls between 400 and the actual `.medium` resolved height (~500pt on iPhone Pro Max), these consumers can choose the wrong tint mode.
+
+**Why not just change the constants.** Adjusting the multiplier (e.g., 600 → 900 for fractions) would move the mis-ordering window, not close it. Any fixed constant is wrong for some device/height combination.
+
+**Proper fix.** Compare resolved heights at runtime. On iOS 16+, `UISheetPresentationController.Detent.resolvedValue(in:)` returns the actual point height, but it requires a `UISheetPresentationControllerDetentResolutionContext` only available inside detent-resolution callbacks. The fix would cache resolved heights during those callbacks and use the cache for semantic comparisons. `sortKey` stays for array ordering (good enough for UIKit's `detents` property), but `<`/`>` on `PresentationDetent` itself stops being the tool for tint decisions. ~30 LOC, touches `Detents.swift` + `BackgroundInteraction.swift`, adds a mutable cache on `Controller`.
+
+On iOS 15 the approximation is exact because `.height(...)` and `.fraction(...)` degrade to `.medium()` and only `.medium` vs. `.large` ever appears.
+
+**Triggers to revisit.**
+
+- A consumer reports incorrect tint behaviour on a mixed custom + system detent set.
+- The library adds a new feature that depends on accurate detent ordering beyond the `.medium`/`.large` pair.
+
+**References.**
+
+- PR [#2](https://github.com/laconicman/SwiftUIBackports/pull/2) — `feat/presentation-detents-height-fraction`. Added `.height`/`.fraction` and rewrote `Comparable`.
+- Devin Review flag R180-186 on PR #2: "sortKey is an approximation that can mis-order mixed height/medium/large sets" (verdict: reasonable trade-off, improvement over old impl, but caveat about tint-adjustment consumers).
+
 ### `BottomActionSheet`: `.fullScreenCover`-based vs. `UIWindow`-overlay implementation
 
 **Current state.** `Backport.bottomActionSheet(...)` is implemented on top of `.fullScreenCover`. The system slide-up animation of the cover is suppressed by routing the presentation `Binding` through a wrapper that commits mutations inside `Transaction(disablesAnimations: true)`. The card's own slide-up / fade is driven by an internal `@State` flag plus `withAnimation`. The cover's outer view applies `.backport.presentationBackground(.clear)` so the host's background does not show through.
