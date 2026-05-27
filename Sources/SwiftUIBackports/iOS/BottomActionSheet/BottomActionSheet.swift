@@ -276,13 +276,14 @@ private extension BottomActionSheet {
         }
 
         private var backdrop: some View {
+            // The card below carries .accessibilityAddTraits(.isModal), which
+            // restricts VoiceOver to card content only — so any backdrop-level
+            // accessibility traits / actions would be unreachable. VoiceOver
+            // dismissal goes through .accessibilityAction(.escape) on the card.
             Color.black
                 .opacity(isVisible ? BottomActionSheet.defaultBackdropOpacity : 0)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(Text("Dismiss"))
-                .accessibilityAction { dismiss() }
                 .onTapGesture { dismiss() }
         }
 
