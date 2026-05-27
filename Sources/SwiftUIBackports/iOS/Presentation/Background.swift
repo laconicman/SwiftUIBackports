@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftBackports
 
+@available(iOS, deprecated: 16.4)
 @available(tvOS, deprecated: 16.4)
 @available(macOS, deprecated: 13.3)
 @available(watchOS, deprecated: 9.4)
