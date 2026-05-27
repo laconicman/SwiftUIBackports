@@ -78,6 +78,7 @@ Environment:
 - `onChange`
 - `openURL`
 - `ProgressView`
+- `presentationBackground`
 - `presentationDetents`
 - `presentationDragIndicator`
 - `quicklookPreview`
