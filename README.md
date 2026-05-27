@@ -61,6 +61,13 @@ Environment:
 @Environment(\.backportRefresh) private var refreshAction
 ```
 
+## Scope
+
+The library ships two layers, kept in separate sections below:
+
+- **Backports** — API-matching polyfills for SwiftUI features introduced in later OS versions. Signatures, semantics, and naming track Apple's official APIs so consumers can drop the `.backport` namespace once they raise their deployment target.
+- **Extras** — non-backport SwiftUI features that don't have a native equivalent. These follow the same `.backport.` discoverability convention but are intentionally scoped to gaps the platform doesn't fill. If you want a more general-purpose component (e.g. a detent-style bottom sheet that mirrors `presentationDetents` on iOS < 16.4), point a dedicated dependency at it instead — for instance [`c-villain/BottomSheets`](https://github.com/c-villain/BottomSheets).
+
 ## Backports
 
 **SwiftUI**
@@ -117,13 +124,24 @@ A custom `ScrollView` that respects `Spacer`'s when the content is not scrollabl
 
 **BottomActionSheet** (iOS only)
 
-A bottom-anchored action-sheet card that always slides up from the bottom of the screen and sizes to its content, on every iOS device and size class — including iPad regular size class, where `.confirmationDialog` and `.sheet + presentationDetents` fall back to popovers. Mirrors the `.sheet` API surface with `isPresented:` and `item:` overloads, and exposes a dismiss action via the `\.bottomActionSheetDismiss` environment value. Supports drag-to-dismiss, VoiceOver `.isModal` + escape gesture, hardware Escape, and Reduce Motion.
+A bottom-anchored action-sheet card that always slides up from the bottom of the screen and sizes to its content, on every iOS device and size class — including iPad regular size class, where `.confirmationDialog` and `.sheet + presentationDetents` fall back to popovers. Mirrors the `.sheet` API surface with `isPresented:` and `item:` overloads. Dismissal works via the consumer's binding, `@Environment(\.dismiss)` (iOS 15+) from inside `content`, backdrop tap, swipe-down, VoiceOver escape, and hardware Escape — all routed through the same card-exit animation. Supports `.isModal`, Reduce Motion, and drag-to-dismiss.
 
 ```swift
-.backport.bottomActionSheet(isPresented: $isShowing) {
-    Button("Cancel") { dismiss() }
+struct CancelSheetContent: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button("Cancel") { dismiss() }
+    }
 }
+
+someView
+    .backport.bottomActionSheet(isPresented: $isShowing) {
+        CancelSheetContent()
+    }
 ```
+
+Different shape from a detent-style bottom sheet (fills modal heights, drag between detents). For that, see [`c-villain/BottomSheets`](https://github.com/c-villain/BottomSheets).
 
 ## Installation
 
