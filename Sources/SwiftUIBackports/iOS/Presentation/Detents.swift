@@ -177,6 +177,15 @@ public extension Backport<Any> {
         /// Heights and fractions sort by numeric value; `.medium` and `.large`
         /// are placed at conservative defaults so a mixed array sorts in a
         /// reasonable order without resolving the runtime screen size.
+        ///
+        /// **Known limitation:** on tall devices `.medium` resolves to ~500pt,
+        /// so a `.height(450)` (sortKey 450) sorts above `.medium` (sortKey 400)
+        /// even though `.medium` is taller at runtime. This can cause incorrect
+        /// tint-adjustment decisions in `update(detents:selection:)` (line ~275)
+        /// and `BackgroundInteraction.Controller.update(interaction:)` when
+        /// mixed custom + system detent sets are compared via `<`/`>`.
+        /// Fixing this properly requires comparing resolved heights at runtime,
+        /// which `Comparable` cannot do. See TECH_DEBT.md.
         private var sortKey: Double {
             if let value = heightValue { return Double(value) }
             if let value = fractionValue { return Double(value) * 600 }
