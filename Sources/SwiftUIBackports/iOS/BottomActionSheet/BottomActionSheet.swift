@@ -23,18 +23,21 @@ public extension Backport where Wrapped: View {
     /// iOS 15-16.3, it goes through the
     /// ``Backport/presentationBackground(_:)`` fallback in this library.
     ///
-    /// Dismissal is exposed through the `\.bottomActionSheetDismiss`
-    /// environment value. Inside `content` (or any descendant of it) write:
+    /// Dismissal: any of the following flips the `isPresented` binding to
+    /// `false`, which triggers the custom card-exit animation before the
+    /// underlying `.fullScreenCover` drops:
     ///
-    ///     @Environment(\.bottomActionSheetDismiss) private var dismiss
-    ///     // ...
-    ///     Button("Cancel") { dismiss() }
+    /// - Setting the binding to `false` directly from consumer code.
+    /// - Reading `@Environment(\.dismiss)` (iOS 15+) inside `content` and
+    ///   calling it from a button.
+    /// - Tapping the dim backdrop.
+    /// - Swiping the card downwards.
+    /// - Performing the VoiceOver Escape gesture (two-finger Z).
+    /// - Pressing Escape on a hardware keyboard.
     ///
     /// The action sheet does not vend a system "Cancel" button — the consumer
     /// is responsible for providing one (or any other dismissal affordance) in
-    /// `content`. Tapping the dim backdrop, swiping the card downwards,
-    /// performing the VoiceOver Escape gesture (two-finger Z), or pressing
-    /// Escape on a hardware keyboard will also dismiss the action sheet.
+    /// `content`.
     ///
     /// - Parameters:
     ///   - isPresented: A binding to a Boolean value that determines whether
@@ -111,115 +114,129 @@ public enum BottomActionSheet {
     public static let defaultDragMinimumDistance: CGFloat = 20
 }
 
-// MARK: - Environment key
-
-/// Environment-injected dismiss action for the enclosing
-/// ``Backport/bottomActionSheet(isPresented:onDismiss:content:)`` or
-/// ``Backport/bottomActionSheet(item:onDismiss:content:)`` presentation.
-///
-/// Read this via `@Environment(\.bottomActionSheetDismiss)` inside the
-/// `content` closure to dismiss the action sheet:
-///
-///     @Environment(\.bottomActionSheetDismiss) private var dismiss
-///     Button("Cancel") { dismiss() }
-///
-/// Outside of a bottom action sheet the action is a no-op.
-public struct BottomActionSheetDismissAction {
-    fileprivate let action: () -> Void
-    public func callAsFunction() { action() }
-}
-
-private struct BottomActionSheetDismissKey: EnvironmentKey {
-    static let defaultValue: BottomActionSheetDismissAction = .init(action: {})
-}
-
-public extension EnvironmentValues {
-    /// An action that dismisses the enclosing bottom action sheet, or a no-op
-    /// when read outside of one. See ``BottomActionSheetDismissAction``.
-    var bottomActionSheetDismiss: BottomActionSheetDismissAction {
-        get { self[BottomActionSheetDismissKey.self] }
-        set { self[BottomActionSheetDismissKey.self] = newValue }
-    }
-}
-
 // MARK: - View modifiers
 
 @available(iOS 15, *)
 private extension BottomActionSheet {
 
     /// `isPresented:` variant of the action-sheet modifier.
+    ///
+    /// The `.fullScreenCover` is driven by an internal `coverPresented`
+    /// @State that is decoupled from the consumer's binding. When the
+    /// consumer's binding flips to `false` (from any source: their own code,
+    /// `\.dismiss`, backdrop tap, drag, VoiceOver escape), the Cover
+    /// observes it via `.onChange`, plays the card-exit animation, and only
+    /// then drops `coverPresented` so the system slide-down is suppressed
+    /// against an already-empty cover.
     struct IsPresentedModifier<SheetContent: View>: ViewModifier {
         @Binding var isPresented: Bool
         let onDismiss: (() -> Void)?
         let sheetContent: () -> SheetContent
 
+        @State private var coverPresented: Bool = false
+
         func body(content: Content) -> some View {
-            // Both the cover's presentation binding *and* the binding passed
-            // into Cover need to suppress system animations — otherwise
-            // dismissals initiated from inside Cover would slide the cover
-            // out via the system transition we explicitly suppressed when
-            // presenting it.
-            let binding = animationDisabledBinding
-            return content
-                .fullScreenCover(isPresented: binding, onDismiss: onDismiss) {
-                    Cover(content: sheetContent, isPresented: binding)
+            content
+                .fullScreenCover(isPresented: coverBridge, onDismiss: onDismiss) {
+                    Cover(
+                        content: sheetContent,
+                        isPresented: $isPresented,
+                        onCardExitComplete: dropCover
+                    )
+                }
+                .onChange(of: isPresented) { newValue in
+                    if newValue && !coverPresented { presentCover() }
+                }
+                .onAppear {
+                    if isPresented && !coverPresented { presentCover() }
                 }
         }
 
-        /// Wraps the `isPresented` binding so that mutations of *this* binding
-        /// are committed inside a transaction with animations disabled. This
-        /// suppresses the default `fullScreenCover` slide-up/slide-down system
-        /// animation without affecting other transactions in the view tree.
-        private var animationDisabledBinding: Binding<Bool> {
+        /// Binding handed to `.fullScreenCover`. The `get` reports our
+        /// internal `coverPresented`; any external set-to-false (e.g.
+        /// `\.dismiss` from inside the cover content) is routed back
+        /// through the consumer's binding so the Cover's `.onChange`
+        /// triggers the custom exit animation.
+        private var coverBridge: Binding<Bool> {
             Binding(
-                get: { isPresented },
+                get: { coverPresented },
                 set: { newValue in
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { isPresented = newValue }
+                    if newValue == false { isPresented = false }
                 }
             )
         }
+
+        private func presentCover() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { coverPresented = true }
+        }
+
+        private func dropCover() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { coverPresented = false }
+        }
     }
 
-    /// `item:` variant of the action-sheet modifier.
+    /// `item:` variant of the action-sheet modifier. Mirrors
+    /// `IsPresentedModifier` but with `Item?` semantics; see its doc comment
+    /// for the dismissal flow.
     struct ItemModifier<Item: Identifiable, SheetContent: View>: ViewModifier {
         @Binding var item: Item?
         let onDismiss: (() -> Void)?
         let sheetContent: (Item) -> SheetContent
 
+        @State private var coverItem: Item? = nil
+
         func body(content: Content) -> some View {
             content
-                .fullScreenCover(item: animationDisabledBinding, onDismiss: onDismiss) { coveredItem in
+                .fullScreenCover(item: coverBridge, onDismiss: onDismiss) { presentedItem in
                     Cover(
-                        content: { sheetContent(coveredItem) },
+                        content: { sheetContent(presentedItem) },
                         isPresented: Binding(
                             get: { item != nil },
                             set: { newValue in
-                                guard newValue == false else { return }
-                                // Route dismissals through an animation-
-                                // disabled transaction so the system slide-
-                                // down animation of fullScreenCover is
-                                // suppressed; the Cover's own card animation
-                                // is what the user sees.
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) { item = nil }
+                                if newValue == false { item = nil }
                             }
-                        )
+                        ),
+                        onCardExitComplete: dropCover
                     )
+                }
+                .onChange(of: item?.id) { newId in
+                    if newId == nil { return }
+                    if coverItem == nil {
+                        presentCover()
+                    } else {
+                        // Item swap inside an already-open cover; mirror the
+                        // new value without re-running the entry animation.
+                        coverItem = item
+                    }
+                }
+                .onAppear {
+                    if let item = item, coverItem == nil { coverItem = item }
                 }
         }
 
-        private var animationDisabledBinding: Binding<Item?> {
+        private var coverBridge: Binding<Item?> {
             Binding(
-                get: { item },
+                get: { coverItem },
                 set: { newValue in
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { item = newValue }
+                    if newValue == nil { item = nil }
                 }
             )
+        }
+
+        private func presentCover() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { coverItem = item }
+        }
+
+        private func dropCover() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { coverItem = nil }
         }
     }
 
@@ -230,9 +247,11 @@ private extension BottomActionSheet {
     struct Cover<SheetContent: View>: View {
         let content: () -> SheetContent
         @Binding var isPresented: Bool
+        let onCardExitComplete: () -> Void
 
         @State private var isVisible: Bool = false
         @State private var dragTranslation: CGFloat = 0
+        @State private var isAnimatingExit: Bool = false
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
@@ -246,6 +265,13 @@ private extension BottomActionSheet {
             .backport.presentationBackground(.clear)
             .task {
                 withAnimation(presentAnimation) { isVisible = true }
+            }
+            .onChange(of: isPresented) { newValue in
+                // The consumer's binding became false — from any path:
+                // their own code, `\.dismiss`, backdrop tap, drag-to-dismiss,
+                // VoiceOver escape, hardware Escape. Play the exit animation
+                // and let the outer modifier drop the cover when it settles.
+                if newValue == false { animateExit() }
             }
         }
 
@@ -262,7 +288,6 @@ private extension BottomActionSheet {
 
         private var card: some View {
             content()
-                .environment(\.bottomActionSheetDismiss, .init(action: dismiss))
                 .padding(.horizontal, BottomActionSheet.defaultOuterPadding)
                 .padding(.bottom, BottomActionSheet.defaultOuterPadding)
                 .opacity(reduceMotion ? (isVisible ? 1 : 0) : 1)
@@ -318,16 +343,31 @@ private extension BottomActionSheet {
             reduceMotion ? BottomActionSheet.reduceMotionAnimation : BottomActionSheet.defaultDismissAnimation
         }
 
+        /// Single user-initiated dismiss path. Flips the consumer's binding to
+        /// `false`; `.onChange(of: isPresented)` above sees the change and
+        /// drives the exit animation. Funnelling through the same binding
+        /// means every dismissal source (consumer code, `\.dismiss`, backdrop
+        /// tap, drag, escape gestures) gets the same animation treatment.
         private func dismiss() {
-            // Animate the card out, then drop the fullScreenCover binding from
-            // the CATransaction completion block. SwiftUI's `withAnimation`
-            // commits its driving state changes into a CATransaction, so the
-            // completion block fires once the animation actually settles —
-            // which avoids the need for a magic-number `asyncAfter` that has
-            // to be kept in sync with the animation's spring response.
+            guard !isAnimatingExit else { return }
+            isPresented = false
+        }
+
+        /// Animate the card off-screen, then ask the outer modifier to drop
+        /// the cover.
+        ///
+        /// SwiftUI's `withAnimation` commits its driving state changes into a
+        /// CATransaction, so the `setCompletionBlock` fires once the animation
+        /// actually settles — which avoids the need for a magic-number
+        /// `asyncAfter` that has to be kept in sync with the spring response.
+        /// This sequencing relies on an undocumented SwiftUI behaviour; see
+        /// the BottomActionSheet entry in `TECH_DEBT.md`.
+        private func animateExit() {
+            guard !isAnimatingExit else { return }
+            isAnimatingExit = true
             CATransaction.begin()
             CATransaction.setCompletionBlock {
-                isPresented = false
+                onCardExitComplete()
             }
             withAnimation(dismissAnimation) {
                 isVisible = false
