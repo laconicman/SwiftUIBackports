@@ -117,12 +117,12 @@ public extension Backport where Wrapped: View {
 /// undone.
 @available(iOS 15, *)
 private struct BackgroundClearer: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
+    func makeUIView(context: Context) -> BackgroundClearingView {
         BackgroundClearingView()
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        (uiView as? BackgroundClearingView)?.clearHostBackground()
+    func updateUIView(_ uiView: BackgroundClearingView, context: Context) {
+        uiView.clearHostBackground()
     }
 }
 
